@@ -1,0 +1,56 @@
+[
+  {
+    "name": "Django-Translation-Check-Fix",
+    "description": "Fix Django\u2019s translation.E004 system check so it allows sub-languages (e.g. \u201cde-at\u201d) when the base language (\u201cde\u201d) is available, aligning with Django\u2019s documented fallback behavior.",
+    "applicable_scenarios": [
+      "Django upgrade/bug-fix tasks involving i18n",
+      "system-check failures on LANGUAGE_CODE sub-languages",
+      "regression-proofing translation checks"
+    ],
+    "steps": [
+      {
+        "step_type": "Locate",
+        "reasoning": "Identify the exact check that raises translation.E004",
+        "action_template": "grep -r \"translation.E004\" django/; open django/core/checks/translation.py and note check_language_settings_consistent()"
+      },
+      {
+        "step_type": "Reproduce",
+        "reasoning": "Create a minimal script that triggers the check with a sub-language",
+        "action_template": "cat > reproduce.py <<'PY'"
+      },
+      {
+        "step_type": "Understand",
+        "reasoning": "Map how Django resolves language fallbacks",
+        "action_template": "read django/conf/locale/__init__.py to see LANG_INFO structure; confirm that base language keys exist while sub-language keys may not"
+      },
+      {
+        "step_type": "Fix",
+        "reasoning": "Patch the checker to fallback from sub-language to base language",
+        "action_template": "in django/core/checks/translation.py replace exact-key lookup with:"
+      },
+      {
+        "step_type": "Test-Happy-Path",
+        "reasoning": "Verify the reported case now passes",
+        "action_template": "python reproduce.py  # expect []"
+      },
+      {
+        "step_type": "Test-Edge-Cases",
+        "reasoning": "Ensure still fails when no base language exists",
+        "action_template": "create test_no_base.py with LANGUAGE_CODE=\"xx-yy\" and no \"xx\"; confirm E004 still raised"
+      },
+      {
+        "step_type": "Regression-Test",
+        "reasoning": "Run Django\u2019s own translation check suite",
+        "action_template": "python -m pytest tests/check_framework/test_translation.py -v"
+      },
+      {
+        "step_type": "Commit",
+        "reasoning": "Stage only the patched translation.py plus any new test files",
+        "action_template": "git add django/core/checks/translation.py tests/; git commit -m \"Fixed translation.E004 to allow sub-language fallback to base language\""
+      }
+    ],
+    "source_experiences": [],
+    "created_at": null,
+    "version": "1.0"
+  }
+]

@@ -1,0 +1,53 @@
+# Exclude evaluation outputs except awm_swebench_lite
+OpenHands/evaluation/evaluation_outputs/awm_fast_test*/
+OpenHands/evaluation/evaluation_outputs/awm_swebench_lite_failed/
+OpenHands/evaluation/evaluation_outputs/awm_test/
+OpenHands/evaluation/evaluation_outputs/outputs/
+# Keep awm_swebench_lite but exclude large jsonl
+OpenHands/evaluation/evaluation_outputs/awm_swebench_lite/results.jsonl
+
+# Exclude node_modules
+node_modules/
+**/node_modules/
+
+# Exclude large binary files
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.zip
+*.tar.gz
+*.bak
+
+# Exclude .DS_Store
+.DS_Store
+**/.DS_Store
+
+# Exclude gemini clipboard
+.gemini-clipboard/
+
+# Exclude claude plans
+.claude/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log

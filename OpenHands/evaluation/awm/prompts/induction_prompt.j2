@@ -1,0 +1,53 @@
+Given a list of successful Django bug-fixing/feature-implementation trajectories, extract common reusable workflows.
+
+Each trajectory contains:
+- Problem statement (GitHub issue description)
+- Sequence of (thought, action) steps taken by the agent
+- Final solution (diff patch)
+
+Requirements:
+1. Extract SUB-ROUTINES that appear across multiple tasks, not full task solutions
+2. Abstract specific values: replace concrete file paths with {{target_file}}, specific error messages with {{error_pattern}}, etc.
+3. Focus on PATTERNS and REASONING, not specific code
+4. Each workflow should be 3-8 steps
+5. Include the REASONING for each step, explaining WHY to do it
+6. Workflows should be general enough to apply to multiple similar problems
+
+Example workflow format:
+
+## Workflow: Debug a Failing Test in Django
+Description: A common workflow for identifying and fixing test failures in Django codebase.
+Applicable scenarios: Test failure, assertion error, unexpected behavior in tests
+
+Steps:
+1. [Understand] Reasoning: Read the error message and stack trace to identify the failing test location.
+   Action: search_code("{{error_keyword}}")
+
+2. [Locate] Reasoning: Find the test file and the specific test method to reproduce the issue.
+   Action: read_file("{{test_file}}")
+
+3. [Trace] Reasoning: Understand what the test is checking and trace the execution flow to the source code.
+   Action: read_file("{{source_file}}")
+
+4. [Analyze] Reasoning: Identify the root cause of the failure by analyzing the code logic.
+   Action: think("The issue is {{analysis}}")
+
+5. [Fix] Reasoning: Apply the necessary fix to the source code to resolve the bug.
+   Action: edit_file("{{source_file}}", {{changes}})
+
+6. [Verify] Reasoning: Run the specific test case again to confirm the fix works and no regression occurs.
+   Action: run_command("python -m pytest {{test_file}}::{{test_method}}")
+
+---
+
+Now, analyze the following successful experiences and extract common workflows:
+
+{{ experiences }}
+
+Extract up to {{ max_workflows }} common workflows from the above experiences.
+Follow these guidelines:
+- Use the exact format shown in the example
+- Separate each workflow with "---"
+- Make workflows specific enough to be useful but general enough to apply to similar problems
+- Use placeholder variables like {{variable_name}} for values that change between instances
+- Focus on the reasoning and decision-making process, not just the actions

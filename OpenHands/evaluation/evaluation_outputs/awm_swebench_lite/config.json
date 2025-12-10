@@ -1,0 +1,15 @@
+{
+  "llm_config_name": "llm.kimi-k2",
+  "agent_class": "CodeActAgent",
+  "max_iterations": 100,
+  "dataset_name": "princeton-nlp/SWE-bench_Lite",
+  "split": "test",
+  "repo_filter": "",
+  "induction_trigger_count": 1,
+  "max_workflows": 50,
+  "truncation_limit": 30000,
+  "output_dir": "evaluation/evaluation_outputs/awm_swebench_lite",
+  "checkpoint_interval": 5,
+  "skip_evaluation": false,
+  "verbose": true
+}

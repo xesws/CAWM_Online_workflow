@@ -1,0 +1,1791 @@
+{
+  "workflows": [
+    {
+      "name": "Recursive Separability Fix for Nested Compound Models *(Updated)*",
+      "description": "When a separability or dependency matrix routine fails on nested CompoundModels because it assumes every sub-model exposes a simple `separable` attribute, recursively pre-compute the separability matrix of each nested CompoundModel before stacking operations.",
+      "applicable_scenarios": [
+        "nested CompoundModels",
+        "missing separable attribute",
+        "_coord_matrix NotImplementedError",
+        "_cstack shape mismatch",
+        "separability_matrix wrong diagonal",
+        "ExpressionWrapper boolean context crash",
+        "negated empty Q(pk__in=[]) SQL failure",
+        "proxy model select_related + only crash",
+        "RelatedPopulator ValueError on missing 'id'",
+        "init_list / klass_info mismatch for proxy vs concrete PK"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that builds the minimal nested CompoundModel **or a proxy-model query with select_related().only()** and calls separability_matrix / generates SQL; run to confirm the bug (wrong diagonal, crash, or invalid SQL / ValueError on 'id' missing from init_list)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "find the separability implementation files **and the RelatedPopulator/klass_info builders** (separable.py, compiler.py, query.py) and identify the failing internal helpers (_coord_matrix, _cstack, _separable, **get_related_selections, get_default_columns, deferred_to_data**)."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "craft debug_coord_matrix.py **or debug_proxy_pk.py** that wraps the suspect helpers with prints/raises to expose the exact point where `separable` attribute is missing, matrix shapes clash, **or the proxy model’s PK is omitted from init_list**; run to isolate the recursive / proxy failure."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "patch _coord_matrix to intercept CompoundModel instances and recursively call _separable on their operands, **ensure deferred_to_data adds the concrete model’s PK to must_include when dealing with proxy models**, and patch _cstack to treat incoming matrices as-is (no reshape) so nested block-diagonal shapes are preserved."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_issue_exact.py that asserts the original nested model **or proxy select_related + only query** now produces the expected diagonal separability matrix / valid SQL; run pytest on the full modeling **and proxy_models / select_related** test suite to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Consistent File Upload Permissions by Default",
+      "description": "When a Django project shows inconsistent file permissions between MemoryUploadedFile uploads (honoring OS umask) and TemporaryUploadedFile uploads (forced 0o600), set the global default FILE_UPLOAD_PERMISSIONS to the desired value (commonly 0o644) so every upload path uses identical permissions regardless of storage engine or handler choice.",
+      "applicable_scenarios": [
+        "insecure file-upload permissions",
+        "FILE_UPLOAD_PERMISSIONS=None",
+        "permission differences between small and large uploads",
+        "hardening Docker containers",
+        "inconsistent umask behavior across environments"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_permissions_issue.py that uploads two test files (one small, one large) through the Django test client and verifies their permission bits; run to confirm inconsistent 0o644 vs 0o600 results."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "find Django upload modules (uploadhandler.py, storage.py, global_settings.py) and locate FILE_UPLOAD_PERMISSIONS usage; confirm that default None causes storage engine fall-back to OS umask while temporary handlers use 0o600."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "change FILE_UPLOAD_PERMISSIONS default in django/conf/global_settings.py from None to the desired value (0o644) so the permission is explicitly enforced everywhere."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "run reproduce_permissions_issue.py again to verify both uploads now emit 0o644; run python manage.py test file_uploads file_storage to ensure no existing tests regress; commit the global_settings.py change with updated release notes explaining the permission hardening."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Safe RawSQL Order-By Deduplication",
+      "description": "When SQLCompiler.remove_ordering_parts() mistakenly strips unique multiline RawSQL expressions because its regex treats them as duplicates, add a unique identifier (model alias + expression SQL hash) to each ORDER-BY clause so deduplication preserves distinct statements.",
+      "applicable_scenarios": [
+        "multiline RawSQL in order_by",
+        "SQLCompiler.get_order_by() deduplication",
+        "RuntimeWarning on skipped ordering terms",
+        "missing ORDER-BY clauses in ORM query output",
+        "**sqlmigrate BEGIN/COMMIT wrapping on databases without transactional DDL**"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that builds a QuerySet ordered by three similar multiline RawSQL strings; run `python manage.py shell` to execute print(qs.query) and confirm only two ORDER-BY clauses appear."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/db/models/sql/compiler.py, search for `ordering_parts.search(sql)`; note the line that saves `without_ordering = ...`; inspect the surrounding loop that inserts `order_by` into `seen` to find the deduplication key."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "patch the suspect loop to print `order_by, sql, seen` on every iteration; run reproduce_issue.py again to see which multiline RawSQL strings collide under the same key."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "change the deduplication key from raw SQL text to `(alias, hashlib.sha1(sql.encode()).hexdigest())`; this keeps multiline RawSQL strings distinct while still collapsing true duplicates; commit the two-line change in `get_order_by`."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "run reproduce_issue.py to verify all three original ORDER-BY clauses now appear; execute `./runtests.py ordering.tests.OrderingTests.test_multiline_rawsql_ordering` (or create the test if absent) to ensure no regressions across Django’s test suite."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Correct Error Message Format",
+      "description": "When a Django field’s ValidationError message omits the invalid input value (unlike its counterparts), patch the error-message string and its parameters so the value is interpolated into the user-facing string, then update any hard-coded test expectations to match the new output.",
+      "applicable_scenarios": [
+        "ModelChoiceField invalid_choice",
+        "missing %(value)s in error message",
+        "inconsistent ValidationError formatting across field types",
+        "test-suite assertion drift"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that feeds an invalid choice to the field (e.g. `ModelChoiceField().clean('999')`) and prints the ValidationError message; confirm the value is missing from the output."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the error code (e.g. `invalid_choice`) in the field’s module (e.g. `django/forms/models.py`) and in the base field classes (`django/forms/fields.py`) to compare how ChoiceField includes `%(value)s` in its `default_error_messages`."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "update the field’s `default_error_messages['invalid_choice']` string to include `%(value)s` and modify the `clean()` method to pass `params={'value': value}` when raising `ValidationError`; ensure parity with sibling fields."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "run the project’s test suite for the field module (e.g. `./runtests.py model_forms`) and note any failures caused by hard-coded old error strings; update those test assertions to expect the new message that contains the interpolated value."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "re-run the reproduction script and the full test suite to confirm the ValidationError now shows the invalid value while preserving all existing behavior; commit the message template, parameters, and updated tests together."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Regex Anchor Hardening for Input Validators",
+      "description": "When Python regex validators unintentionally allow trailing newlines because they use `^`/`$` anchors (which match embedded newlines), replace the anchors with `\\A`/`\\Z` to enforce true start/end boundaries and block malicious or accidental newline suffixes.",
+      "applicable_scenarios": [
+        "username validators",
+        "email validators",
+        "slug validators",
+        "any user-facing identifier field",
+        "Django auth validators",
+        "Python regex quirks",
+        "security hardening",
+        "input sanitization"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that feeds the validator a string ending with `\\n` (e.g., `\"alice\\n\"`); run to confirm the validator incorrectly returns `True`."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the regex pattern containing `^` and `$` in the target validators file (e.g., `django/contrib/auth/validators.py`); open the file and identify every validator class that uses the weak anchors."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "replace each regex’s leading `^` with `\\A` and trailing `$` with `\\Z`; ensure no other regex flags (e.g., `re.MULTILINE`) are enabled that would re-introduce the quirk."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_regex_anchors.py that asserts the validator now rejects strings with trailing newlines while still accepting valid inputs; run the project’s validator test suite to confirm no regression."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run a final verification script that loops over edge-case strings (with/without newlines, carriage returns, mixed line endings) to prove the hardened anchors behave correctly across platforms."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "HttpResponse Binary Content Type Expansion",
+      "description": "When HttpResponse fails to accept binary-like objects such as memoryview or buffer objects (commonly returned by PostgreSQL BinaryField), extend the internal `make_bytes()` helper to explicitly coerce those types to bytes so the response preserves the intended binary payload instead of falling back to `str()` and producing garbage.",
+      "applicable_scenarios": [
+        "BinaryField backends returning memoryview",
+        "PostgreSQL bytea queries",
+        "buffer objects",
+        "file-like `.read()` results",
+        "unexpected bytes-like types",
+        "Django 3.0+ http layer"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that instantiates HttpResponse with a memoryview (e.g. `mv = memoryview(b'\\x00\\x01\\x02')`) and prints `response.content`; run to confirm the bug (content shows `b'<memory...'` instead of the raw bytes)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open `django/http/response.py`, locate the `make_bytes()` helper inside `HttpResponseBase`; identify the existing `elif isinstance(content, bytes)` branch and note the final `else` that coerces via `str(content).encode()`."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "insert a new `elif isinstance(content, (memoryview, bytearray, buffer)):` branch that calls `bytes(content)` and returns the result; place it immediately after the `bytes` check so binary-like objects are handled before the generic string fallback."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create `test_memoryview_response.py` that asserts `HttpResponse(memoryview(b'data')).content == b'data'`; run `./runtests.py responses` and `./runtests.py httpwrappers` to ensure no regressions for existing string/bytes paths."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "spin up a minimal Django project with PostgreSQL, save a `BinaryField`, retrieve the instance (will return memoryview), feed it into `HttpResponse`, and curl the endpoint to confirm the binary payload is identical to the original file; commit with a note in `docs/releases/<version>.txt` under “HTTP layer now supports memoryview objects”."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Clear Primary Key After Fast Delete",
+      "description": "When Django’s fast-delete path (used for models without dependencies) fails to clear the instance’s primary key after `.delete()`, add `instance.pk = None` immediately after the fast-delete call so the object’s state matches the database reality.",
+      "applicable_scenarios": [
+        "fast-delete optimization",
+        "instance.pk not None after delete()",
+        "models without foreign-keys",
+        "Django 2.1+",
+        "test isolation failures",
+        "stale PK surprises"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that instantiates a model with no FKs, calls `.delete()`, then asserts `instance.pk is None`; run to confirm the bug (PK still set)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open `django/db/models/deletion.py`, search for `can_fast_delete`; identify the fast-delete block (around lines 276-281) that deletes the row but never nulls the instance’s PK."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "insert `instance.pk = None` on the line immediately after the fast-delete execution so the instance state stays consistent with the database row removal."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "add `test_fast_delete_clears_pk()` to `tests/delete/tests.py` that creates an isolated model, deletes it, and asserts `pk is None`; run `./runtests.py delete` to confirm the fix and ensure no regressions."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run the broader `./runtests.py model_fields` and `./runtests.py transactions` suites to guarantee the change doesn’t break normal deletes, cascades, or transactions; commit with a note in `docs/releases/<version>.txt` under “Model instances now always clear their primary key after `.delete()`”."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Null-Byte-Safe Path Resolution in Autoreloader",
+      "description": "When Django’s StatReloader intermittently crashes with “ValueError: embedded null byte” while resolving file paths, widen the exception handler around Path.resolve() to also catch ValueError so the autoreloader silently skips the corrupted path and continues watching.",
+      "applicable_scenarios": [
+        "autoreload crashes",
+        "pathlib.resolve ValueError",
+        "embedded null byte in file paths",
+        "intermittent dev-server restarts",
+        "Django 2.2+",
+        "StatReloader",
+        "watcher robustness"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_nullbyte.py that constructs a path string containing “\\x00” and calls Path(path).resolve(); run to confirm the ValueError is raised."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/utils/autoreload.py, search for “resolve” to find the exact line inside StatReloader where Path.resolve() is invoked; note the surrounding try/except that currently only catches FileNotFoundError."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "edit the except clause to catch (FileNotFoundError, ValueError) so any “embedded null byte” exception is swallowed; keep the same fallback behavior (skip the path)."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "add TestCase test_nullbyte_path_skipped() in tests/utils_tests/test_autoreload.py that feeds a null-byte path to the watcher and asserts no crash; run ./runtests.py utils_tests.test_autoreload to ensure the new code path is covered."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "clear __pycache__, reinstall Django in editable mode, run the full autoreload test suite; manually start runserver with a maliciously-named file in the project tree to confirm the dev-server stays alive and logs no ValueError."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Enum Name Preservation in Migrations",
+      "description": "When Django migrations store Enum values instead of names, causing breakage when the value is later translated, patch the EnumSerializer to serialize the member name (Enum['NAME']) instead of the raw value so migrations remain stable across languages.",
+      "applicable_scenarios": [
+        "Enum default on CharField",
+        "translated enum values",
+        "migration invalidation after translation",
+        "serializer emits value instead of name"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_enum_issue.py that defines a TextEnum with translatable values, assigns it as the default to a CharField, runs makemigrations, and inspects the generated file to confirm the serializer wrote the value instead of the name."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for EnumSerializer in django/db/migrations/serializer.py; open the file and identify the `_serialize_Enum` method that currently returns `__class__(enum.value)`; note the test expectations in tests/migrations/test_writer.py."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "change the return line in `_serialize_Enum` to `__class__(enum.__class__.__name__ + '[' + repr(enum.name) + ']')` so the migration stores the symbolic name instead of the mutable value."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "run `./manage.py makemigrations` again and confirm the migration now contains `TextEnum['MEMBER_NAME']`; execute python manage.py test migrations.test_writer to catch any changed expectations (e.g., re.RegexFlag) and update the corresponding test output."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "create test_migration_scenario.py that translates the enum value to another language, runs the old migration, and asserts it still applies cleanly; commit the serializer change and updated test baseline together with a release-note entry: “Migrations now store enum member names to remain valid after value translations.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Preserve User Method Overrides in Model Field Display Helpers",
+      "description": "When Django’s model field auto-generation unconditionally overwrites a user-defined `get_FOO_display()` method, guard the injection with `hasattr(cls, method_name)` so custom implementations are preserved.",
+      "applicable_scenarios": [
+        "get_FOO_display override ignored",
+        "user-defined choice display method clobbered",
+        "model field contribute_to_class setattr conflict",
+        "Django 2.2+ regression"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_override.py that defines a model with choices and a custom `get_field_display()` method returning a fixed string; instantiate and print the result to confirm Django ignores the override."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `get_.*_display` inside `django/db/models/fields/`; open `fields/__init__.py` and locate the `contribute_to_class` method where `setattr(self.model, method_name, partialmethod(...))` unconditionally installs the helper."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print just before the setattr to show `method_name` and `hasattr(cls, method_name)`; run reproduce_override.py to prove the attribute already exists yet is still overwritten."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "wrap the setattr line in `if not hasattr(cls, method_name):` so the auto-generated helper is only added when the model has not already defined it; keep the existing partialmethod logic unchanged."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_override_display.py that asserts `instance.get_field_display()` returns the custom string; run `./runtests.py model_fields` to ensure no regressions and that the override is now respected."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Inner-Class Field Path Serialization Fix for Migrations",
+      "description": "When makemigrations writes an incorrect import path for a custom Field subclass defined as an inner class (e.g. `Outer.Inner`), patch the migration TypeSerializer to use `__qualname__` instead of `__name__` so the generated migration contains the full dotted path and can import the field successfully.",
+      "applicable_scenarios": [
+        "inner-class Field subclasses",
+        "makemigrations broken import",
+        "wrong module path in migration",
+        "__qualname__ vs __name__ mismatch",
+        "custom field inside non-model class"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_inner_field.py that defines an outer non-model class containing a custom Field subclass (e.g. `class Outer: class InnerCharField(models.CharField): pass`) and a model that uses it; run `python manage.py makemigrations` and open the generated file to confirm the import path is missing the outer class (bug)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `__name__` inside `django/db/migrations/serializer.py`; identify the `TypeSerializer` (or similar) class that converts field classes to import strings; note the line that currently uses `obj.__name__`."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print in the serializer to output `obj.__name__` vs `obj.__qualname__` for the inner-class field; run reproduce_inner_field.py again to verify `__qualname__` contains the correct dotted path while `__name__` drops the outer class."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "replace `__name__` with `__qualname__` in the TypeSerializer’s return statement so the migration records the full dotted path (e.g. `Outer.InnerCharField`); ensure no other serializers are affected."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "re-run `makemigrations` and confirm the generated migration now imports the field correctly; create test_inner_class_field.py that asserts the serialized output contains the dotted name; run `./runtests.py migrations.test_writer` to ensure no regressions for regular top-level fields."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Optional Regex Group Regression Fix for re_path",
+      "description": "When Django 3.0+ starts injecting None-valued positional arguments for optional named regex groups in re_path patterns, causing view signature mismatches, patch the URL resolver to skip None-valued optional groups so they are not passed as positional args.",
+      "applicable_scenarios": [
+        "optional named groups in re_path",
+        "view TypeError “takes … positional arguments”",
+        "Django 3.0 regression",
+        "regex URL patterns with (?P<name>…)?",
+        "mixed required/optional groups"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that defines a re_path with an optional named group (?P<format>…)?, maps it to a view expecting only request + optional kwarg, and calls resolve() to trigger the TypeError; run to confirm the bug (None injected as positional arg)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the exact error text “takes … positional arguments” in django/core/handlers and django/urls; open django/urls/resolvers.py and find the block inside resolve() that builds callback_args from regex match groups."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert print statements to output matched groups, their values, and the final callback_args list; rerun reproduce_issue.py to verify None values for unmatched optional groups are appended as positional arguments."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "modify the loop that appends to callback_args to skip any group whose value is None (indicating an unmatched optional group); ensure required positional groups still flow through unchanged."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_optional_regex_group.py that asserts the view is called without the None positional arg and that the kwarg dict is empty when the optional segment is omitted; run ./runtests.py urlpatterns to ensure no regressions for existing patterns."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Sublanguage System-Check Fix with Fallback-Aware Validation",
+      "description": "When Django’s system check framework raises translation.E004 for a sublanguage (e.g. “de-at”) even though the base language (“de”) is available and documented to be used as fallback, patch the translation consistency check to re-use the same fallback logic that the runtime language negotiator uses (`get_supported_language_variant`) so the validation permits the sublanguage whenever its base is present.",
+      "applicable_scenarios": [
+        "translation.E004 on LANGUAGE_CODE like “fr-ca” or “de-at”",
+        "sublanguage not in LANGUAGES but base language is",
+        "system-check hardening vs documented fallback behaviour",
+        "Django 3.0+"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_sublang_e004.py that sets LANGUAGE_CODE to a sublanguage not listed in LANGUAGES but whose base language is, then calls `python manage.py check`; run to confirm the spurious E004."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for “translation.E004” and “check_language_settings_consistent” inside `django/core/checks/translation.py`; open the file and identify the line that raises the error when the requested code is absent from `settings.LANGUAGES`."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "craft debug_fallback.py that prints the result of `get_supported_language_variant(requested_code)` to prove Django’s runtime would accept the sublanguage by falling back to the base; run to confirm the check and the runtime disagree."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "replace the strict `if code not in settings.LANGUAGES:` test with a call to `get_supported_language_variant(code, supported=settings.LANGUAGES)` wrapped in a try/except LookupError; only raise E004 if this helper also fails, ensuring parity with runtime behaviour."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_sublang_fallback.py that loops over (“de-at”, “fr-ca”, “es-ar”) and asserts no E004 when the corresponding base language exists; run `./runtests.py check_framework.test_translation` plus the new file to ensure no regressions for truly invalid codes."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Atomic Deserialization for Serialized Rollback",
+      "description": "When `TransactionTestCase.serialized_rollback = True` fails to restore fixtures because `deserialize_db_from_string` inserts objects outside a transaction and violates FK order, wrap the deserialization loop in `transaction.atomic(using=self.connection.alias)` so all objects are committed together and dependencies are respected.",
+      "applicable_scenarios": [
+        "serialized_rollback=True",
+        "TransactionTestCase",
+        "deserialize_db_from_string",
+        "foreign-key constraint failures during rollback emulation",
+        "out-of-order fixture loading",
+        "integrity errors in test databases"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_serialized_rollback_fk.py that defines models with FK dependencies (e.g. Author → Book → Chapter), creates instances, enables serialized_rollback on a TransactionTestCase, and runs the test to confirm “FOREIGN KEY constraint failed” during fixture reload."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/db/backends/base/creation.py, find `deserialize_db_from_string`, note the bare `for obj in serializers.deserialize(...)` loop that lacks transaction wrapping."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add `from django.db import transaction` at the top of the file and wrap the deserialization loop in `with transaction.atomic(using=self.connection.alias):` so every object is inserted in one atomic block, preserving dependency order."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_serialized_rollback_ordering.py that asserts the same FK-heavy fixture now loads without error; run `./runtests.py test_utils.test_transactiontestcase` to ensure no regressions for existing serialized-rollback behavior."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run the full test suite on the target database backend (SQLite/PostgreSQL) to confirm no new integrity errors; commit with release-note entry: “Serialized rollback now wraps deserialization in a transaction to prevent FK ordering failures.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Correct Misleading Error Hint for Recursive Relationship",
+      "description": "When Django’s validation raises an error hint that incorrectly suggests ManyToMany-only keyword arguments (`symmetrical`, `through`) for a ForeignKey, locate the hint string in the related-field validation code, replace “ForeignKey” with “ManyToManyField”, and drop any m2m-only parameters so the hint matches valid syntax.",
+      "applicable_scenarios": [
+        "recursive relationship validation",
+        "E334/E335 checks",
+        "through_fields missing on multi-FK intermediary model",
+        "misleading ForeignKey hint",
+        "user-facing error message correction"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that defines an intermediary model with ≥2 ForeignKeys to the same parent, adds a ManyToManyField with that intermediary as `through` but omits `through_fields`, then runs `python manage.py check` to trigger the faulty hint."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep the codebase for the literal hint text “If you want to create a recursive relationship” to find the exact line in `django/db/models/fields/related.py`; open the file and note both occurrences (E334 & E335)."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "edit the hint string in place, replacing “ForeignKey” with “ManyToManyField” and removing any m2m-only kwargs (`symmetrical`, `through`) so the suggestion is syntactically valid; keep the remainder of the message intact."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "run the existing invalid-models test that asserts the old hint to confirm it now fails, then update the test expectation to the corrected hint; run `./runtests.py invalid_models_tests.test_relative_fields` to ensure the test passes."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "re-run the reproduction script to confirm the new hint appears; execute `./runtests.py m2m_recursive m2m_through` to guarantee no regressions in broader many-to-many validation; commit the single-line string change and updated test baseline together."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Recursive Setting Cleansing for Non-Dict Iterables",
+      "description": "When SafeExceptionReporterFilter.get_safe_settings() fails to mask secrets inside lists, tuples, or other nested iterables because cleanse_setting only recurses into dicts, extend the cleanser to walk any iterable (list, tuple, set, etc.) and mask items whose keys match SECRET_PATTERNS.",
+      "applicable_scenarios": [
+        "leaked secrets in nested lists",
+        "uncleansed settings in debug traces",
+        "SafeExceptionReporterFilter incomplete masking",
+        "nested iterables in Django settings",
+        "security hardening of error reports"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that builds a settings dict containing nested lists/tuples with keys like 'secret', 'api_key', etc.; call SafeExceptionReporterFilter().get_safe_settings() and print the result to confirm secrets remain unmasked."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/views/debug.py, find SafeExceptionReporterFilter and the cleanse_setting function; note the existing `if isinstance(value, dict):` branch and the final `return value` that skips non-dict iterables."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print inside cleanse_setting to log the type of every value; run reproduce_issue.py to verify lists/tuples are returned untouched while dicts are cleansed."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add an `elif isinstance(value, (list, tuple, set)):` branch that recursively calls cleanse_setting on each element and reconstructs the same type; place it after the dict branch so nested iterables are fully masked."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_cleansed_iterables.py that asserts nested lists/tuples/sets with secret keys are fully masked; run ./runtests.py view_tests.tests.test_debug to ensure no regressions and that the new test passes."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Safe Constraint-Specific Deletion for Overlapping Unique & Index Constraints",
+      "description": "When a migration crashes deleting an index_together that shares columns with an existing unique_together because _delete_composed_index finds more than one matching constraint, filter the query by index-type so only the intended index constraint is removed.",
+      "applicable_scenarios": [
+        "index_together deletion",
+        "unique_together overlap",
+        "_delete_composed_index ValueError \"Found wrong number of constraints\"",
+        "schema alteration on PostgreSQL/MySQL",
+        "constraint-name collision"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that defines a model with two fields, adds both fields to unique_together and index_together, runs makemigrations, then removes index_together; run to confirm ValueError: Found wrong number (2) of constraints."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/db/backends/base/schema.py, search for _delete_composed_index and _constraint_names to locate the helper that counts constraints; note the line that raises ValueError when len(constraints) != 1."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "patch the suspect line to print constraints, index_type and table_name; rerun reproduce_issue.py to verify both _uniq and _idx constraints are found, confirming the count mismatch."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "modify the _constraint_names call inside _delete_composed_index to pass index=True (or type_=Index) so only index-type constraints are counted; keep unique constraints untouched, ensuring the count is exactly 1 and the deletion succeeds."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_delete_index_together_with_unique.py that asserts the migration applies cleanly; run ./runtests.py migrations.test_operations and ./runtests.py schema to ensure no regressions for existing constraint removals."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Consistent Zero-Count Return for QuerySet.delete()",
+      "description": "When QuerySet.delete() returns inconsistent tuples—(0, {}) versus (0, {'model': 0})—for empty querysets, patch the deletion counter logic in Collector.delete() to skip adding zero-count entries so every zero-deletion call uniformly returns (0, {}).",
+      "applicable_scenarios": [
+        "QuerySet.delete() edge-cases",
+        "empty queryset handling",
+        "fast-delete vs. general-delete path consistency",
+        "regression-free zero-deletion contract"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_zero_delete.py that creates models with and without FKs, issues .delete() on empty querysets, and prints the returned tuples to confirm the inconsistency."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/db/models/deletion.py, find Collector.delete(), and identify both the fast-delete (can_fast_delete) block and the general path that append zero counts to deleted_counter."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert prints around deleted_counter updates to show when zero counts are added; rerun reproduce_zero_delete.py to verify which branch causes the mismatch."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "in both fast-delete and general paths, wrap deleted_counter updates with if count: so only positive counts are recorded; ensure empty querysets consistently produce (0, {})."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_zero_consistency.py asserting (0, {}) for empty querysets across simple, related, and inherited models; run ./runtests.py delete to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Constraint Field Validation Parity",
+      "description": "When Django’s model constraints (UniqueConstraint, CheckConstraint, etc.) do not validate that the named fields actually exist—unlike the legacy unique_together check—add the missing field-existence validation inside the model’s `_check_constraints` method so makemigrations raises E012 (or an equivalent) for typos or missing fields.",
+      "applicable_scenarios": [
+        "UniqueConstraint fields missing",
+        "CheckConstraint fields missing",
+        "constraint validation gap vs unique_together",
+        "silent migration failures",
+        "E012 parity for modern constraints"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_constraint_fields.py that defines a model with a UniqueConstraint (or CheckConstraint) referencing a non-existent field; run `python manage.py check` to confirm no error is raised, then uncomment an equivalent unique_together block to see E012 triggered."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for E012 and `_check_unique_together` in django/db/models/base.py to find the legacy validation logic; then locate `_check_constraints` (same file) and note the absence of field-existence checks for UniqueConstraint/CheckConstraint."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert prints inside `_check_constraints` to list every constraint and the model’s actual field names; rerun reproduce script to verify the missing field is never checked."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "inside `_check_constraints`, loop over each constraint’s `fields` (or `condition` columns), test `if field not in {f.name for f in cls._meta.get_fields()}` and yield `checks.Error(..., id='models.E012')` to match unique_together behavior; keep the logic generic so CheckConstraint and future subclasses reuse the same check."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_constraint_field_check.py that asserts E012 is raised for UniqueConstraint and CheckConstraint with missing fields; run `./runtests.py invalid_models_tests` and `./runtests.py check_framework` to ensure no regressions and that the new validation fires exactly like unique_together."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Guard Against Silent No-Ops on Combined QuerySets",
+      "description": "When queryset combinators (union, intersection, difference) silently ignore subsequent operations such as distinct(), add an early `_not_support_combined_queries()` check inside the offending method so a clear NotSupportedError is raised instead of failing silently.",
+      "applicable_scenarios": [
+        "union() followed by distinct()",
+        "intersection() then order_by()",
+        "difference() then extra()",
+        "combined queries with unsupported chaining",
+        "Django 3.2+"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that builds two querysets, combines them with `.union()`, calls the problematic operation (e.g. `.distinct()`), and asserts the result set is unchanged; run to confirm silent no-op."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep the codebase for the failing method (`distinct`, `order_by`, etc.) and for `_not_support_combined_queries`; open the source file (usually `django/db/models/query.py`) and identify where the method delegates to the combined-query path without validation."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print immediately inside the method to show `self.query.combinator`; rerun reproduce_issue.py to verify the combinator is set to `'union'` (or `'intersection'`, `'difference'`) and the method proceeds unimpeded."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add `self._not_support_combined_queries('distinct')` (or the relevant operation name) at the top of the method so any combinator-backed queryset immediately raises `NotSupportedError` with a clear message."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_combined_guard.py that asserts `qs.union(qs2).distinct()` now raises `NotSupportedError`; run `./runtests.py queries.test_qs_combinators` and the full queries test suite to ensure no regressions and that the guard is only hit when combinators are present."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Add Missing Async Handler Method for ASGI Compatibility",
+      "description": "When an ASGI handler crashes with \"'NoneType' object is not callable\" because a mixin or subclass lacks the expected `get_response_async` coroutine, locate the missing method in the inheritance chain and supply a minimal async wrapper that delegates to the existing synchronous `get_response`.",
+      "applicable_scenarios": [
+        "ASGIStaticFilesHandler",
+        "StaticFilesHandlerMixin",
+        "missing get_response_async",
+        "NoneType callable inside ASGI app",
+        "Django 3.0+",
+        "async-static file serving"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that starts an ASGI server (Daphne/Hypercorn) serving a static file through ASGIStaticFilesHandler; run to confirm the traceback ends with `'NoneType' object is not callable` inside the handler’s `__call__`."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open `django/contrib/staticfiles/handlers.py`, trace the inheritance of `ASGIStaticFilesHandler` → `StaticFilesHandlerMixin` → `ASGIHandler`; note that `ASGIHandler.__call__` awaits `self.get_response_async` but the mixin only defines `get_response`."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add an async `get_response_async` method to `StaticFilesHandlerMixin` that simply calls and returns the existing synchronous `self.get_response(request)`; keep the wrapper non-blocking via `sync_to_async` if the response must be awaited."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_async_static.py that uses `AsyncClient` or `async_asgi_testclient` to request a static file; assert 200 response and no traceback; run `./runtests.py staticfiles_tests` and `./runtests.py asgi_tests` to ensure no regressions for sync or async paths."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "spin up a minimal ASGI project with `python -m daphne -b 0.0.0.0 -p 8000 myproject.asgi:application`, curl a static asset, and confirm the server logs no `NoneType` error; commit the mixin change with release-note entry: “ASGIStaticFilesHandler now provides `get_response_async` for full async compatibility.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Strip Leading/Trailing Punctuation in Utility Text Functions",
+      "description": "When a text utility such as `slugify()` leaves unwanted leading or trailing punctuation (dashes, underscores, dots, etc.) in the returned string, patch the function to strip those characters from both ends after the core transformation so the output is clean and URL-ready.",
+      "applicable_scenarios": [
+        "slugify trailing dash",
+        "utility text cleanup",
+        "punctuation stripping",
+        "user-facing slug generation",
+        "SEO-friendly URLs"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that calls the utility with input known to produce leading/trailing punctuation (e.g. `\"___Hello World---\"`); run to confirm the bug (output still contains `___` prefix or `-` suffix)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the utility function (e.g. `slugify`) in `django/utils/text.py`; open the file and identify the final return statement where the transformed string is handed back."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "insert `.strip('_-')` (or the appropriate punctuation set) immediately before the return line so any leading/trailing dashes or underscores are removed while preserving internal punctuation and hyphens."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_slugify_strip.py that asserts `slugify(\"___Hello World---\") == \"hello-world\"` and covers edge cases (only punctuation, empty string, internal hyphens intact); run the existing `tests/utils_tests/test_text.py` suite to ensure no regressions."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run the full Django test suite on `utils_tests`; manually test a small Django project that generates slugs from user input to confirm URLs no longer start or end with dashes/underscores; commit the one-line change with release-note entry: “slugify() now strips leading and trailing dashes/underscores for cleaner slugs.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Self-Referencing FK Ordering Fix",
+      "description": "When ordering by a self-referencing foreign-key’s `_id` column (e.g. `order_by('parent_id')`) produces an extra LEFT JOIN and wrong column reference, patch the SQL compiler to skip the join and use the local `_id` column directly when the relation targets the same model and the field is used only for ordering.",
+      "applicable_scenarios": [
+        "self-referential ForeignKey",
+        "ordering by relation `_id`",
+        "extra LEFT JOIN",
+        "wrong column in ORDER BY",
+        "recursive model ordering"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that defines a model with a self-FK (e.g. `parent = ForeignKey('self')`), creates a few instances, then issues `order_by('-parent_id')`; run `print(qs.query)` to confirm an unwanted LEFT JOIN appears and the ORDER BY clause references the joined table instead of the local `parent_id` column."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `find_ordering_name` and `get_order_by` in `django/db/models/sql/compiler.py`; open the file and locate the block that resolves ordering field paths; note the logic that adds joins for related fields even when the field is only used for ordering."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert prints around the join addition to show `opts.model`, `field_path`, and `alias`; rerun reproduce_issue.py to verify the compiler adds a join for `parent_id` even though the target model is the same and the local column suffices."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "patch `find_ordering_name` (or the relevant helper) to detect when `field_path` ends with `_id`, the relation targets the same model (`opts == target_opts`), and the field is used only for ordering; in that case return the local column alias instead of adding a join."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_self_fk_ordering.py that asserts `qs.order_by('-parent_id').query` contains no extra JOIN and the ORDER BY clause uses the local `parent_id` column; run `./runtests.py ordering` and `./runtests.py many_to_one` to ensure no regressions in general ordering logic."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Clear Combinator Flags on Empty QuerySets",
+      "description": "When QuerySet.none() fails to clear combinator flags (union/intersection/difference), the SQL compiler continues to treat the query as a combined query and ignores the EmptyQuerySet marker, causing ``.none()`` to return *all* results from the original combinator branches.  Patch `set_empty()` in `django/db/models/sql/query.py` to nullify `self.combinator` and `self.combined_queries` so the compiler always sees a genuine empty query.",
+      "applicable_scenarios": [
+        "QuerySet.none() on union",
+        "intersection",
+        "difference queries",
+        "ModelMultipleChoiceField.clean()",
+        "EmptyQuerySet mis-classified as combinator query"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_combinator_none.py that builds two querysets, unions them, calls `.none()`, then prints the result count; run to confirm the bug (count > 0)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `set_empty`, `combinator`, and `_combinator_query` in `django/db/models/sql/query.py`; open the file and identify the `set_empty()` method that adds `WHERE 1=0` but leaves `self.combinator` intact."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print into `SQLCompiler.as_sql()` to output `self.query.combinator` and `self.query.is_empty()`; rerun the script to verify the compiler skips the empty check when combinator is set."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "patch `set_empty()` to also set `self.combinator = None` and `self.combined_queries = []` so the query is no longer treated as a combined query; ensure the change only affects empty queries."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_combinator_none.py that asserts `qs.union(qs2).none().count()` returns 0; run `./runtests.py queries.test_qs_combinators` and the full queries suite to ensure no regressions for legitimate union/intersection/difference behaviour."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Syndication Framework Feature Extension",
+      "description": "When the Django syndication framework lacks a first-class parameter that the underlying feedgenerator already supports (e.g. `comments`), expose it by adding the argument to the view’s `feed.add_item()` call and let the explicit parameter override any duplicate key in `item_extra_kwargs`.",
+      "applicable_scenarios": [
+        "missing item_comments",
+        "missing item_enclosure",
+        "any new feed.add_item parameter",
+        "feedgenerator/view parity gap",
+        "avoiding item_extra_kwargs workarounds"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that builds a minimal Feed subclass, calls `add_item` with the desired parameter (e.g. `comments=\"http://example.com/comments\"`), and prints the generated RSS/Atom to confirm the field is missing."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `feedgenerator.add_item` and `item_extra_kwargs` in `django/contrib/syndication/views.py`; open the file and identify the single `feed.add_item(...)` call inside `Feed.get_feed()`."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print inside `add_item` to show the kwargs dict; rerun reproduce_issue.py to verify the parameter is absent even though `feedgenerator.py` already accepts it."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add the new keyword argument (e.g. `comments=item_comments`) to the `feed.add_item()` signature inside `views.py`; insert logic so the explicit argument overrides any duplicate key in `item_extra_kwargs` to keep precedence predictable."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_syndication_feature.py that asserts the generated feed contains the new element/attribute; run `./runtests.py syndication_tests` and the full feedgenerator suite to ensure no regressions; commit with release-note entry: “Syndication framework now exposes <feature> parameter directly.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Abstract Model Field Equality Fix",
+      "description": "When abstract model fields inherited by different child models compare equal (causing unwanted deduplication in sets), patch Field.__eq__, __hash__, and __lt__ to include the field’s model class so each concrete model’s field is treated as distinct.",
+      "applicable_scenarios": [
+        "abstract base models",
+        "field equality in sets",
+        "creation_counter collision",
+        "model inheritance",
+        "field deduplication surprises"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that defines an abstract parent with a field, two concrete children, and asserts `set(B._meta.fields) == set(C._meta.fields)` to confirm the bug (fields compare equal and collapse to one item)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `__eq__` inside `django/db/models/fields/`; open `fields/__init__.py` and read the `Field.__eq__` implementation to confirm it only checks field attributes, not `self.model`."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert prints inside `__eq__` and `__hash__` to show `self.model`, `other.model`, and `self.creation_counter`; run reproduce_issue.py to verify the model class is ignored and creation_counter is identical for abstract-derived fields."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "modify `Field.__eq__` to include `self.model == other.model`, update `Field.__hash__` to hash `(self.creation_counter, self.model)`, and adjust `Field.__lt__` to compare `(self.model._meta.label, self.creation_counter)`; ensure abstract fields still compare equal within the same model but differ across models."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_abstract_field_equality.py that asserts `B.myfield != C.myfield`, `hash(B.myfield) != hash(C.myfield)`, and `len({B.myfield, C.myfield}) == 2`; run `./runtests.py model_fields` to ensure no regressions for existing field ordering or equality tests."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Publicize Internal Helper & Enrich Serialized Context",
+      "description": "**",
+      "applicable_scenarios": [
+        "**  \n- admin app_list context enrichment",
+        "private API promotion",
+        "template context customization",
+        "Django admin blocks",
+        "custom admin views"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_enrichment.py that instantiates the helper and prints app_list/model dict to verify serialized-only data; run to confirm missing model class."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep codebase for `_build_dict`/`_build_??_dict` to locate the private helper that produces the context dict; open the target file and note the dictionary keys being returned."
+        },
+        {
+          "step_type": "FixAdd",
+          "reasoning": "Reasoning",
+          "action_template": "insert `model_dict['model'] = opts.model` (or equivalent) into the public dict so the context contains the actual model class alongside serialized data."
+        },
+        {
+          "step_type": "Refactor",
+          "reasoning": "Reasoning",
+          "action_template": "rename the helper from `_build_app_dict` to `build_app_dict` or similar to make it public; update all internal call sites (index, app_index) to use the new name."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_enrichment.py that asserts `'model' in build_app_dict()['models'][0]` and `hasattr(AdminSite, 'build_app_dict')`; run `./runtests.py admin_views` and target custom test to confirm no regressions."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "spin up a minimal admin project, subclass change_list with `def get_changelist_instance(self): app_list = self.build_app_dict() …`, manipulate app_list using the real model class, and view the page to confirm no AttributeError or missing key."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Secure Token Binding via Contextual Hash Attributes",
+      "description": "When a Django (or similar) token generator produces cryptographically signed tokens that remain valid after a user state change (e-mail, phone, etc.), patch the generator’s `_make_hash_value()` to include the mutable attribute so the token self-invalidates when that attribute changes.",
+      "applicable_scenarios": [
+        "password-reset tokens",
+        "email-change tokens",
+        "time-sensitive invite links",
+        "magic-login tokens",
+        "API key rotation",
+        "any signed-token workflow that must be bound to a mutable user attribute"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that creates a user, requests a token, changes the critical attribute (e.g. email), then tries to redeem the token; run to confirm the token is still accepted (vulnerability exists)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the token generator class (e.g. PasswordResetTokenGenerator) in */tokens.py; open the file and identify `_make_hash_value()` as the single point where user state is folded into the hash."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "insert the mutable attribute into the hash string with `str(getattr(user, 'email', ''))` (or equivalent) so any subsequent change alters the hash and invalidates the token; keep the fallback empty string for users without that attribute."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "add test_token_invalid_on_email_change() in the appropriate test file (e.g. tests/auth_tests/test_tokens.py) that asserts the old token no longer verifies after `.save()` on the email field; run `./runtests.py auth_tests.test_tokens` to confirm the fix and no regressions."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run the full auth test suite plus any integration tests that redeem tokens to ensure no side effects; commit with release-note entry: “Token generators now bind tokens to the user’s email address; tokens are invalidated when the email changes.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Named-Tuple Preservation in Range Filters",
+      "description": "When Django’s query-builder unpacks and re-packs tuples while resolving `__range` (or similar) lookups, it breaks named-tuple subclasses by naïvely invoking the constructor with *args, causing a `TypeError` about missing positional arguments. Guard the tuple-reconstruction path so only plain tuples are rebuilt; named-tuples are left intact.",
+      "applicable_scenarios": [
+        "upgrading Django 2.2→3.0+",
+        "named-tuple arguments in __range",
+        "__in",
+        "or any lookup that walks tuple elements",
+        "regression in Query.resolve_lookup_value"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that defines a named-tuple (e.g. `PriceRange(namedtuple)`), uses it in `MyModel.objects.filter(value__range=PriceRange(low, high))`, and runs under Django 3.0 to confirm `TypeError: __new__() missing 1 required positional argument`."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `resolve_lookup_value` in `django/db/models/sql/query.py`; open the file and identify the block that iterates over tuple elements and calls `_constructor(*values)`."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print before the `_constructor` call to show `type(value), getattr(value, '_fields', None)`; rerun reproduce_issue.py to confirm the named-tuple enters the reconstruction path and fails."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "wrap the tuple-reconstruction logic with `if hasattr(value, '_fields'):` to skip named-tuples; return them unchanged. Plain tuples continue to be rebuilt, preserving existing behaviour."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "add test_namedtuple_range.py inside an appropriate test module (e.g. `tests/lookup/tests.py`) that asserts the queryset executes without error and returns the expected rows; run `./runtests.py lookup` to ensure no regressions for plain-tuple ranges."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Admin Inline verbose_name_plural Defaults from verbose_name",
+      "description": "When Django admin InlineModelAdmin ignores its own verbose_name when auto-generating verbose_name_plural and falls back to the model’s Meta.verbose_name_plural, patch InlineModelAdmin.__init__ to derive verbose_name_plural from the Inline’s verbose_name when only the latter is explicitly supplied.",
+      "applicable_scenarios": [
+        "admin Inline classes",
+        "missing verbose_name_plural",
+        "model Meta.verbose_name_plural fallback",
+        "user-supplied verbose_name not honoured",
+        "pluralisation logic reuse"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that defines an Inline class with only verbose_name set (no verbose_name_plural), registers it in the admin, and prints the rendered heading; run to confirm the heading uses the model’s Meta.verbose_name_plural instead of pluralising the Inline’s verbose_name."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `verbose_name_plural` inside `django/contrib/admin/options.py`; open the file and locate `InlineModelAdmin.__init__` around lines 2040-2043 where the fallback to `self.opts.verbose_name_plural` occurs."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "inside `InlineModelAdmin.__init__`, after the superclass call, add:"
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_inline_verbose_defaults.py that asserts"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Non-Numeric PK Data-Loss Guard",
+      "description": "When saving a parent model whose ForeignKey points to a child that uses a non-automatic CharField (or other non-numeric) primary key, ensure the parent’s implicit `<fk>_id` attribute is correctly updated after the child’s PK is set to avoid silent data loss.",
+      "applicable_scenarios": [
+        "CharField primary_key",
+        "non-auto PK",
+        "parent.save() after child.pk = value",
+        "empty-string PK edge-case",
+        "ForwardManyToOneDescriptor caching",
+        "_prepare_related_fields_for_save"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_data_loss.py that defines Product(sku=CharField PK) and Order(product=ForeignKey(Product)), instantiates Order, assigns an unsaved Product with empty PK, sets Product.sku later, saves Order, and asserts Order.product_id == Product.sku to confirm the bug (empty string)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for ForwardManyToOneDescriptor.__set__ and _prepare_related_fields_for_save in django/db/models/fields/related_descriptors.py and django/db/models/base.py; map where the parent’s `<fk>_id` is cached and never refreshed after child PK mutation."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert prints around descriptor `__set__` and _prepare_related_fields_for_save to show `instance.<fk>_id`, `value.pk`, and `value._state.adding`; rerun reproduce script to verify the parent field remains empty-string while the child PK becomes valid."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "patch _prepare_related_fields_for_save in base.py to treat empty-string FK same as None: extend the existing `if getattr(instance, field.attname) is None:` check with `or str(getattr(instance, field.attname)).strip() == ''` so the ORM re-syncs the parent field when the child PK turns valid."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_non_numeric_pk_save.py that exercises CharField, UUIDField, and IntegerField PKs, asserting `parent.<fk>_id == child.pk` after save; run pytest on many_to_one, model_fields, and basic test suites to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Bin-Op Symmetry Fix for Q / Expression Interoperability",
+      "description": "When a Q object fails to support the reverse bitwise operators (__rand__, __ror__) that an Expression subclass (e.g. Exists, F, OuterRef) expects, patch Q to delegate those operations to the generic Combinable mixin so both Q & Exists and Exists & Q commute without TypeError.",
+      "applicable_scenarios": [
+        "Q & Exists",
+        "Exists & Q",
+        "bitwise operators on Expression subclasses",
+        "query_utils Q symmetry",
+        "Combinable delegation gap"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that builds the minimal failing expression (Q() & Exists(...)) and the working reverse form; run to confirm the TypeError."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for class Q in django/db/models/query_utils.py; open the file and note the absence of __rand__/__ror__ or their hard-coding inside Q’s __and__/__or__ that assume the other operand is always a Q."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "craft debug_binop.py that prints type(self), type(other), and the MRO of Q and Exists; verify Q lacks Combinable’s __rand__/__ror__ while Exists inherits them from Expression→Combinable."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "remove any hand-rolled __rand__/__ror__ inside Q and instead inherit or explicitly delegate to Combinable._combine(other, self, ‘AND’/‘OR’); ensure the delegation path wraps the foreign Expression without attempting to re-wrap it as a Q child."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_q_exists_symm.py that asserts both Q() & Exists(...) and Exists(...) & Q() return valid Q objects; run pytest on queries and expressions suites to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Metaclass Subclass Check Fix for AutoField Variants",
+      "description": "When Django’s DEFAULT_AUTO_FIELD validation fails for custom subclasses of BigAutoField or SmallAutoField because the metaclass only exact-matches against the concrete AutoField variants instead of honoring the subclass hierarchy, patch the metaclass `__subclasscheck__` to delegate to the built-in `issubclass` logic so any descendant of the allowed AutoField types is accepted.",
+      "applicable_scenarios": [
+        "custom AutoField subclasses",
+        "DEFAULT_AUTO_FIELD setting",
+        "BigAutoField/SmallAutoField inheritance",
+        "metaclass subclasscheck override",
+        "model options validation"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that sets DEFAULT_AUTO_FIELD to a minimal BigAutoField subclass (e.g. `class MyBigAutoField(models.BigAutoField): pass`) and runs `python manage.py check`; confirm the crash with `TypeError: DEFAULT_AUTO_FIELD must be a subclass of AutoField`."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `__subclasscheck__` in `django/db/models/fields/__init__.py`; open the file and identify the metaclass (usually `AutoFieldMeta`) whose `__subclasscheck__` method only tests `other in (BigAutoField, SmallAutoField)` instead of using `issubclass`."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print inside `__subclasscheck__` to show `other`, `issubclass(other, AutoField)`, and the current hard-coded tuple; run reproduce_issue.py to verify the custom subclass returns `False` although it is a valid descendant."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "replace the hard-coded membership test with `return issubclass(other, (BigAutoField, SmallAutoField))` so the metaclass respects the inheritance hierarchy; keep the method short-circuit for exact matches to preserve performance."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_autofield_subclass.py that asserts `issubclass(MyBigAutoField, AutoField)` is `True` and that `./manage.py check` passes with DEFAULT_AUTO_FIELD pointing to the subclass; run `./runtests.py model_options` and `./runtests.py model_fields` to ensure no regressions for built-in AutoField types."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Remove Invalid Label \"for\" Attribute for Non-Labelable Widgets",
+      "description": "When a Django widget renders only text or non-interactive HTML, its label may still include a \"for\" attribute pointing to a non-labelable element. Patch the widget’s `id_for_label` property to return `None` so Django omits the \"for\" attribute entirely, producing semantically correct and accessible HTML.",
+      "applicable_scenarios": [
+        "read-only widgets",
+        "plain-text display widgets",
+        "admin fieldsets",
+        "accessibility compliance",
+        "labelable element mismatch"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that instantiates the widget, wraps it in a BoundField, prints `field.label_tag()`, and confirms the presence of a \"for\" attribute pointing to a non-existent input."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the widget class (e.g. `ReadOnlyPasswordHashWidget`) in `django/contrib/auth/forms.py` and its template in `django/contrib/auth/templates/auth/widgets/`; identify the base `Widget.id_for_label()` implementation in `django/forms/widgets.py` that auto-generates an ID."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "override `id_for_label` in the widget class to return `None`; this signals Django to render `<label>` without the \"for\" attribute, eliminating the labelable-element mismatch."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_widget_label.py that asserts `\"for=\" not in field.label_tag()`; run `./runtests.py auth_tests.test_forms` and `./runtests.py admin_widgets` to ensure no regressions."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run the full auth and admin test suites; manually inspect the generated HTML in the admin change-form to confirm the label appears without a \"for\" attribute and passes accessibility validators."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Ensure Migration Import for models.Model References",
+      "description": "When Django's migration serializer fails to add `from django.db import models` for a generated migration that contains `models.Model` in the `bases` tuple (or any other reference), patch the TypeSerializer's return value to include the required import list so the migration runs without NameError.",
+      "applicable_scenarios": [
+        "migration missing import",
+        "NameError: name 'models' is not defined",
+        "models.Model in bases",
+        "TypeSerializer import gap",
+        "Django 3.2+ migration codegen"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py with models.Model referenced in any base class, run `makemigrations` and `migrate --fake-initial` to trigger the NameError."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `TypeSerializer` and `bases` inside `django/db/migrations/serializer.py`; identify the block that serializes model classes and returns the import list."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print inside `TypeSerializer.serialize()` to show the returned imports when the object is `models.Model`; confirm the list is empty, proving the bug."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "edit `TypeSerializer.serialize()` to append `'from django.db import models'` to the import list when the object is `models.Model`; ensure the change only affects the exact model class, not subclasses."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "re-run reproduce_issue.py and confirm migration now imports models; execute `./runtests.py migrations.test_writer` plus `./runtests.py migrations.test_serializer` to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Extensible Autocomplete JSON Response",
+      "description": "Refactor Django’s AutocompleteJsonView to allow arbitrary extra fields in the JSON response (e.g. data- attributes) by isolating the result-serialization logic into a single overridable helper (`serialize_result`) so subclasses can enrich the payload without duplicating the entire view.",
+      "applicable_scenarios": [
+        "admin autocomplete",
+        "dynamic admin forms",
+        "data-attribute enrichment",
+        "third-party autocomplete packages",
+        "downstream projects that need extra per-item metadata"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that registers a model with an autocomplete field, opens the admin change-form, intercepts the autocomplete XHR, and prints the raw JSON to confirm only `{id, text}` keys are present."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `AutocompleteJsonView` and `serialize_result` in `django/contrib/admin/views/autocomplete.py`; read the file to confirm `get()` hardcodes the dict structure and no hook exists."
+        },
+        {
+          "step_type": "Refactor",
+          "reasoning": "Reasoning",
+          "action_template": "extract the inline dict creation into a new `serialize_result(self, obj)` method that returns `{'id': obj.pk, 'text': str(obj)}`; update `get()` to call `self.serialize_result(obj)` for each item."
+        },
+        {
+          "step_type": "Extend",
+          "reasoning": "Reasoning",
+          "action_template": "subclass AutocompleteJsonView, override `serialize_result` to inject extra keys (e.g. `{'id': obj.pk, 'text': str(obj), 'data-foo': obj.foo}`), wire the subclass in `admin.py` via `get_urls()`; reload the admin to verify the new keys appear in the JSON."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_serialize_result.py that instantiates the view, calls `serialize_result` on a model instance, and asserts the returned dict contains the extra fields; run `./tests/runtests.py admin_views.test_autocomplete_view` to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Hashability Fix for Value Wrapper Classes",
+      "description": "When a Django value-wrapper class (e.g. ModelChoiceIteratorValue) becomes unhashable after gaining __eq__ but no __hash__, add a __hash__ method that mirrors the equality semantics so the object can again be used as a dict key or set member.",
+      "applicable_scenarios": [
+        "ModelChoiceIteratorValue",
+        "unhashable type TypeError",
+        "custom widget create_option",
+        "dict/set usage of form values",
+        "Django 3.1+ iterator wrappers"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that feeds the wrapper value into a set/dict or calls hash() on it; run to confirm TypeError."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the class name (e.g. ModelChoiceIteratorValue) in django/forms/ and django/db/; open the file and note the presence of __eq__ but absence of __hash__."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add a __hash__ method that returns hash(self.value) (or the hash of the wrapped primitive) so equality and hash are consistent; keep the method single-line and read-only."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_hashable.py that asserts hash(obj) succeeds, obj can be added to a set, and dict[obj] = 1 works; run the project’s forms test suite to ensure no regressions."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "re-run the original widget code (e.g. create_option with data-* attributes) to confirm the TypeError disappears; commit the one-line __hash__ addition with release-note entry: “Made ModelChoiceIteratorValue hashable to allow dict/set usage in custom widgets.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Remove Hard-coded Label “for” Attribute from MultiWidget",
+      "description": "When MultiWidget unconditionally appends “_0” to every label’s `for` attribute via its overridden `id_for_label()` method, delete the method so the widget falls back to the base Widget behavior (no index suffix) and the surrounding label omits the unusable “for” entirely.",
+      "applicable_scenarios": [
+        "MultiWidget label rendering",
+        "inaccessible “for” targets",
+        "ChoiceWidget-style opt-out",
+        "admin form accessibility",
+        "widget label cleanup"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft `reproduce_issue.py` that instantiates MultiWidget, calls `widget.id_for_label('myid')`, prints the result; run to confirm hard-coded “myid0” suffix."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `id_for_label` inside `django/forms/widgets.py` to locate the MultiWidget override; open the file and note the method body that returns `f'{id_}0'`."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "delete the `id_for_label` method from MultiWidget class; with no override, the widget inherits Widget.id_for_label which simply returns the supplied id unchanged, and BoundField will skip adding a “for” attribute when the method result equals the original id (no suffix)."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "run `./runtests.py forms_tests.widget_tests.test_multiwidget` to ensure no regressions; create `test_label_no_for.py` that asserts MultiWidget().id_for_label('myid') == 'myid' and that a rendered label tag contains no “for” attribute."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Recursive Separability Fix for Nested CompoundModels",
+      "description": "When a separability or dependency matrix routine fails on nested CompoundModels because it assumes every sub-model exposes a simple `separable` attribute, recursively pre-compute the separability matrix of each nested CompoundModel before stacking operations.",
+      "applicable_scenarios": [
+        "nested CompoundModels",
+        "missing separable attribute",
+        "_coord_matrix NotImplementedError",
+        "_cstack shape mismatch",
+        "separability_matrix wrong diagonal",
+        "ExpressionWrapper boolean context crash",
+        "negated empty Q(pk__in=[]) SQL failure"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that builds the minimal nested CompoundModel **or ExpressionWrapper(~Q(...))** and calls separability_matrix / generates SQL; run to confirm the bug (wrong diagonal, crash, or invalid SQL)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "find the separability implementation files **and boolean-expression wrapper** (separable.py, test_separable.py, expressions.py) and identify the failing internal helpers (_coord_matrix, _cstack, _separable, **as_sql for empty WHERE clauses**)."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "craft debug_coord_matrix.py **or debug_empty_where.py** that wraps the suspect helpers with prints/raises to expose the exact point where `separable` attribute is missing, matrix shapes clash, **or empty SQL is generated**; run to isolate the recursive / boolean failure."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "patch _coord_matrix to intercept CompoundModel instances and recursively call _separable on their operands, **and patch ExpressionWrapper.as_sql to treat empty WHERE clauses as TRUE for boolean contexts**; patch _cstack to treat incoming matrices as-is (no reshape) so nested block-diagonal shapes are preserved."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_issue_exact.py that asserts the original nested model **or negated empty Q expression** now produces the expected diagonal separability matrix / valid SQL; run pytest on the full modeling **and expressions** test suite to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Messages Framework Serialization Parity Fix",
+      "description": "When Django’s messages framework silently converts empty-string extra_tags to None during serialization/deserialization because MessageEncoder uses truthiness instead of an explicit None check, patch the encoder/decoder to test `is not None` so empty strings survive round-trips across all storage backends.",
+      "applicable_scenarios": [
+        "messages framework",
+        "extra_tags empty string",
+        "cookie storage",
+        "session storage",
+        "fallback storage",
+        "MessageEncoder",
+        "MessageDecoder",
+        "serialization parity"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that constructs a message with extra_tags=\"\", serializes it with MessageEncoder, immediately deserializes with MessageDecoder, and asserts extra_tags is still \"\"; run to confirm the bug (it becomes None)."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "open django/contrib/messages/storage/cookie.py, locate MessageEncoder.default() and MessageDecoder.decode() and identify the line that checks if obj.extra_tags: instead of if obj.extra_tags is not None:."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "change the truthy test to an explicit None test in both encoder and decoder so empty strings are preserved; ensure the same fix is applied to any storage backend that re-implements its own encoder/decoder (session, fallback)."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_exact_issue.py that round-trips a message with extra_tags=\"\" through every built-in storage backend (cookie, session, fallback) and asserts the deserialized extra_tags equals \"\"; run to confirm the fix."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run ./runtests.py messages_tests to ensure no regressions across the entire messages framework; commit the one-line change in cookie.py (and any other backends) with release-note entry: “Messages framework now preserves empty-string extra_tags during serialization.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Add Missing Reverse Binary Magic Methods (e.g., __radd__) to Lazy Proxy Objects",
+      "description": "When a lazy proxy object (SimpleLazyObject, LazyObject, etc.) lacks a reverse binary magic method such as `__radd__`, python falls back to the *other* object’s `__add__` which usually fails; add the missing method via `new_method_proxy` or a bespoke lambda so the proxy behaves like its wrapped value in right-hand arithmetic expressions.",
+      "applicable_scenarios": [
+        "SimpleLazyObject",
+        "LazyObject",
+        "lazy string concatenation",
+        "reverse arithmetic",
+        "missing __radd__",
+        "missing __rmul__",
+        "missing __rsub__",
+        "missing __ror__",
+        "Django utils functional proxies",
+        "lazy evaluation of user-supplied callables",
+        "template variables that may end up in + expressions"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create reproduce_issue.py that assigns a lazy string (SimpleLazyObject) and attempts `\"lhs \" + lazy_object`; run to confirm TypeError or incorrect result."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the proxy class (e.g. SimpleLazyObject) in django/utils/functional.py; open the file and list already-proxied magic methods to confirm the missing reverse method."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert a print inside the proxy’s `__getattr__` or temporarily add `__radd__` that raises to see the exact moment Python looks for the method; confirm the wrapped object’s `__radd__` exists but the proxy never forwards to it."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "add the missing method to the proxy class—either"
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_radd_specific.py asserting both `lazy + \"suffix\"` and `\"prefix \" + lazy` return the same str as if the wrapped value were used directly; run pytest on utils_tests/test_simplelazyobject.py to ensure no regressions."
+        },
+        {
+          "step_type": "Extend",
+          "reasoning": "Reasoning",
+          "action_template": "repeat step 4 for any other missing reverse binary methods (`__rmul__`, `__rsub__`, `__ror__`, etc.) using the same pattern; keep each method one-line for consistency."
+        },
+        {
+          "step_type": "Verify",
+          "reasoning": "Reasoning",
+          "action_template": "run the full Django test suite to ensure no side effects; commit with release-note entry: “SimpleLazyObject now supports reverse binary arithmetic methods (__radd__, __rmul__, …) for full proxy transparency.”"
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Extend JSON-Serialization Utilities with Pluggable Encoders",
+      "description": "When a Django utility like `django.utils.html.json_script()` hard-codes `DjangoJSONEncoder` and you need to emit JSON with a custom encoder (e.g., one that serializes decimals as strings or enums by name), add an optional `encoder` parameter to the utility and its template-filter wrapper while preserving backward compatibility.",
+      "applicable_scenarios": [
+        "custom JSON encoding in templates",
+        "enum-to-name migration stability",
+        "decimal-as-string APIs",
+        "content-security via json_script",
+        "reusable encoder parameter pattern"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "craft reproduce_issue.py that calls the utility (e.g. `json_script(data, \"id\")`) with data requiring a custom encoder; run to confirm it crashes or uses the wrong format."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for the utility (`json_script`) in `django/utils/html.py` and its filter wrapper in `django/template/defaultfilters.py`; open both files and note the hard-coded `django.core.serializers.json.DjangoJSONEncoder` import and usage."
+        },
+        {
+          "step_type": "Design",
+          "reasoning": "Reasoning",
+          "action_template": "sketch the new signature `json_script(value, element_id, encoder=DjangoJSONEncoder)` and update the filter wrapper to accept `encoder=None` and forward it; ensure the default remains the original encoder for backward compatibility."
+        },
+        {
+          "step_type": "Patch",
+          "reasoning": "Reasoning",
+          "action_template": "in `django/utils/html.py`, replace `json.dumps(..., cls=DjangoJSONEncoder)` with `json.dumps(..., cls=encoder)`; add `encoder=DjangoJSONEncoder` parameter to the function; in `django/template/defaultfilters.py` add `encoder=None` keyword argument and pass it through."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create test_encoder.py that asserts `json_script(Decimal('1.1'), \"id\", encoder=DecimalAsStringEncoder)` returns the expected string; run `./runtests.py utils_tests.test_html` and `./runtests.py template_tests` to ensure no regressions."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    },
+    {
+      "name": "Deduplicate Template-Tag Library Checks Across TEMPLATES & Auto-Discovery",
+      "description": "When Django’s `check_for_template_tags_with_the_same_name` raises a false-positive `templates.E003` for the same tag module that appears both in `TEMPLATES['OPTIONS']['libraries']` and is auto-discovered from `INSTALLED_APPS`, patch the check to normalize and deduplicate absolute module paths before counting duplicates so identical libraries are only counted once.",
+      "applicable_scenarios": [
+        "templates.E003 false-positive",
+        "TEMPLATES['OPTIONS']['libraries']",
+        "auto-discovered templatetags",
+        "duplicate name check",
+        "django.core.checks.templates"
+      ],
+      "steps": [
+        {
+          "step_type": "Reproduce",
+          "reasoning": "Reasoning",
+          "action_template": "create `reproduce_e003.py` that registers the same `templatetags` library in both `INSTALLED_APPS` and `TEMPLATES['OPTIONS']['libraries']`, then runs `python manage.py check`; confirm spurious `templates.E003`."
+        },
+        {
+          "step_type": "Locate",
+          "reasoning": "Reasoning",
+          "action_template": "grep for `check_for_template_tags_with_the_same_name` in `django/core/checks/templates.py` and open the file; identify the loop that collects libraries from `get_template_tag_modules()` without deduplication."
+        },
+        {
+          "step_type": "Debug",
+          "reasoning": "Reasoning",
+          "action_template": "insert `print(tag_modules)` before the duplicate test to show the same absolute path listed twice; run reproduce script to confirm the list contains duplicates."
+        },
+        {
+          "step_type": "Fix",
+          "reasoning": "Reasoning",
+          "action_template": "wrap the collected `tag_modules` list with `dict.fromkeys()` or convert to a `set` to remove duplicate absolute module paths, then reconvert to list before the name collision check; keep the exact error message format unchanged."
+        },
+        {
+          "step_type": "Test",
+          "reasoning": "Reasoning",
+          "action_template": "create `test_deduplication.py` that registers the same library twice (once via apps, once via TEMPLATES) and asserts `./manage.py check` returns 0 errors; run `./runtests.py check_framework.test_templates` to ensure genuine duplicate names still raise `templates.E003`."
+        }
+      ],
+      "source_experiences": [],
+      "created_at": null,
+      "version": "1.0"
+    }
+  ],
+  "last_updated": "2025-12-02T19:51:16.376977",
+  "total_count": 43
+}

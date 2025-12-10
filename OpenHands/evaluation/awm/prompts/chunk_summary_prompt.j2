@@ -1,0 +1,22 @@
+You are analyzing a segment of an agent's problem-solving trajectory.
+
+## Problem Context
+{{ problem_statement }}
+
+## Trajectory Segment ({{ step_count }} steps)
+{{ chunk_steps }}
+
+## Task
+Analyze this segment and extract the key information. Respond in the following format:
+
+Phase: [one of: understanding, locating, fixing, testing, debugging]
+Action: [brief summary of what actions were taken, e.g., "read config files, search for error pattern"]
+Reasoning: [the key reasoning that led to these actions - WHY the agent made these decisions]
+Files: [comma-separated list of files involved, or "none" if no files]
+Outcome: [success/failure/error/ongoing, or "none" if not applicable]
+
+Guidelines:
+- Phase should reflect the PRIMARY activity in this segment
+- Action should be concise (under 50 words)
+- Reasoning should capture the decision-making logic (under 100 words)
+- Focus on WHAT the agent learned or decided, not just WHAT it did
